@@ -1,9 +1,8 @@
 #include <iostream>
 #include <map>
+#include <vector>
 #include "pthread.h"
 #include "unistd.h"
-#include "stdlib.h"
-#include "queue"
 #include "chrono"
 
 using namespace std;
@@ -58,6 +57,7 @@ map<int, vector<Booking>> bookings; // vector contains all booked tickets
 ActiveQueryTable _AQT[MAX];         // this table data structure contains currently executing queries
 pthread_mutex_t lock_AQT;           // used to ensures mutual exclusion while updating _AQT
 pthread_mutex_t lock_events;        // used to ensures mutual exclusion while updating events table
+pthread_mutex_t lock_console;       // used to ensure mutual exclusion while printing in console
 
 void *startReservationSystemDaemon(void *arg);
 void *autoGenerateQueries(void *arg);
@@ -86,6 +86,11 @@ int main()
         cout << "\nMutex initialization for events table failed.";
         return 1;
     }
+    if (pthread_mutex_init(&lock_console, NULL) != 0)
+    {
+        cout << "\nMutex initialization for events table failed.";
+        return 1;
+    }
 
     printf("\n");
     printf("<===== WELCOME TO NEHRU CENTER EVENT RESERVATION SYSTEM =====>");
@@ -97,6 +102,7 @@ int main()
     pthread_join(masterThread, NULL);
     pthread_mutex_destroy(&lock_AQT);
     pthread_mutex_destroy(&lock_events);
+    pthread_mutex_destroy(&lock_console);
 
     return 0;
 }
@@ -142,11 +148,13 @@ int generateRandomNumOfSeatsToBook()
 int getRandomBookedTicketToCancel(int threadNo)
 {
     int totalBookings = bookings[threadNo].size();
+    int bookingIndex;
     if (totalBookings == 0)
     {
         return -1;
     }
-    return rand() % bookings[threadNo].size();
+    bookingIndex = rand() % bookings[threadNo].size();
+    return bookingIndex;
 }
 
 /**
@@ -173,12 +181,23 @@ string generateBookingId(int event)
     return bookingId;
 }
 
+/**
+ * @brief Generate random interval for sleep time
+ * @return int
+ */
 int generateRandomInterval()
 {
-    int interval = rand() % 3 + 2;
+    int interval = rand() % 3 + 2; // range 2 to 4
     return interval;
 }
 
+/**
+ * @brief Begining of a query execution. Adds non-conflicting query into AQT.
+ * As a first the executing query must be added to AQT (Active Query Table)
+ * @param threadNo {int}
+ * @param query {struct Query}
+ * @return int
+ */
 int beginQueryExecution(int threadNo, Query query)
 {
     int row_AQT = -1;
@@ -212,6 +231,7 @@ int beginQueryExecution(int threadNo, Query query)
             {
                 _AQT[i] = {query.event, query.type, threadNo};
                 row_AQT = i;
+                break;
             }
         }
     }
@@ -220,6 +240,11 @@ int beginQueryExecution(int threadNo, Query query)
     return row_AQT;
 }
 
+/**
+ * @brief After thread completing the query execution the query needs to be removed
+ * from the AQT (Active Query Table)
+ * @param row {int} - query index in the AQT Table
+ */
 void completedQueryExecution(int row)
 {
     pthread_mutex_lock(&lock_AQT);
@@ -238,29 +263,41 @@ void enquireNumOfAvailableSeatsForEvent(int threadNo, Query query)
     int row;
     int availableSeats;
     int timeout = 5;
+
     while ((row = beginQueryExecution(threadNo, query)) == -1)
     {
-        // cout << "\nWAITING QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+        pthread_mutex_lock(&lock_console);
+        cout << "\n<WAITING> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
         if (--timeout == 0)
         {
+            cout << "\n<TIMEOUT> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+            cout << "::INPUT::" << endl;
+            cout << " Type = " << query.type << endl;
+            cout << " Event = " << query.event << endl;
+            pthread_mutex_unlock(&lock_console);
             return;
         }
+        pthread_mutex_unlock(&lock_console);
         sleep(generateRandomInterval());
     }
 
-    cout << "\nQUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+    pthread_mutex_lock(&lock_console);
+    cout << "\n<STARTED EXECUTION> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
     cout << "::INPUT::" << endl;
     cout << " Type = " << query.type << endl;
     cout << " Event = " << query.event << endl;
+    pthread_mutex_unlock(&lock_console);
 
     pthread_mutex_lock(&lock_events);
     sleep(generateRandomInterval());
     availableSeats = events[query.event];
     pthread_mutex_unlock(&lock_events);
 
-    cout << "\nQUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+    pthread_mutex_lock(&lock_console);
+    cout << "\n<COMPLETED EXECUTION> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
     cout << "::OUTPUT::" << endl;
     cout << " Available Seats " << availableSeats << endl;
+    pthread_mutex_unlock(&lock_console);
 
     completedQueryExecution(row);
 }
@@ -282,19 +319,29 @@ void bookTicketsForEvent(int threadNo, Query query)
 
     while ((row = beginQueryExecution(threadNo, query)) == -1)
     {
-        // cout << "\nWAITING QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+        pthread_mutex_lock(&lock_console);
+        cout << "\n<WAITING> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
         if (--timeout == 0)
         {
+            cout << "\n<TIMEOUT> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+            cout << "::INPUT::" << endl;
+            cout << " Type = " << query.type << endl;
+            cout << " Event = " << query.event << endl;
+            cout << " No. of Tickets = " << query.numOfSeats << endl;
+            pthread_mutex_unlock(&lock_console);
             return;
         }
+        pthread_mutex_unlock(&lock_console);
         sleep(generateRandomInterval());
     }
 
-    cout << "\nQUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+    pthread_mutex_lock(&lock_console);
+    cout << "\n<STARTED EXECUTION> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
     cout << "::INPUT::" << endl;
     cout << " Type = " << query.type << endl;
     cout << " Event = " << query.event << endl;
     cout << " No. of Tickets = " << query.numOfSeats << endl;
+    pthread_mutex_unlock(&lock_console);
 
     pthread_mutex_lock(&lock_events);
     sleep(generateRandomInterval());
@@ -311,7 +358,8 @@ void bookTicketsForEvent(int threadNo, Query query)
     }
     pthread_mutex_unlock(&lock_events);
 
-    cout << "\nQUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+    pthread_mutex_lock(&lock_console);
+    cout << "\n<COMPLETED EXECUTION> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
     cout << "::OUTPUT::" << endl;
 
     if (isBookingSuccessfull == false)
@@ -331,10 +379,17 @@ void bookTicketsForEvent(int threadNo, Query query)
         cout << " Event " << ticket.event << endl;
         cout << " No. of Tickets Booked " << ticket.numOfSeats << endl;
     }
+    pthread_mutex_unlock(&lock_console);
 
     completedQueryExecution(row);
 }
 
+/**
+ * @brief Type 3 Query - cancel a booking for an event choosen random by the thread
+ * @param threadNo {int}
+ * @param query {struct Query}
+ * @param randomTicketIndex {int} - thread choose one random index from its private booking list
+ */
 void cancelBookedTicket(int threadNo, Query query, int randomTicketIndex)
 {
     bool isCancellationSuccessfull;
@@ -349,18 +404,27 @@ void cancelBookedTicket(int threadNo, Query query, int randomTicketIndex)
         ticket = bookings[threadNo][randomTicketIndex];
         while ((row = beginQueryExecution(threadNo, query)) == -1)
         {
-            // cout << "\nWAITING QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+            pthread_mutex_lock(&lock_console);
+            cout << "\n<WAITING> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
             if (--timeout == 0)
             {
+                cout << "\n<TIMEOUT> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+                cout << "::INPUT::" << endl;
+                cout << " Type = " << query.type << endl;
+                cout << " Choosen Random Booking Index = " << randomTicketIndex << endl;
+                pthread_mutex_unlock(&lock_console);
                 return;
             }
+            pthread_mutex_unlock(&lock_console);
             sleep(generateRandomInterval());
         }
     }
 
-    cout << "\nQUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+    pthread_mutex_lock(&lock_console);
+    cout << "\n<STARTED EXECUTION> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
     cout << "::INPUT::" << endl;
     cout << " Type = " << query.type << endl;
+    pthread_mutex_unlock(&lock_console);
 
     pthread_mutex_lock(&lock_events);
     sleep(generateRandomInterval());
@@ -379,14 +443,15 @@ void cancelBookedTicket(int threadNo, Query query, int randomTicketIndex)
     }
     pthread_mutex_unlock(&lock_events);
 
-    cout << "\nQUERY::" << query.queryNo << " Thread No " << threadNo << endl;
+    pthread_mutex_lock(&lock_console);
+    cout << "\n<COMPLETED EXECUTION> QUERY::" << query.queryNo << " Thread No " << threadNo << endl;
     cout << "::OUTPUT::" << endl;
 
     if (isCancellationSuccessfull == false)
     {
         cout << " Booking Cancellation Failed." << endl;
         cout << " Sorry, you don't have any bookings to cancel." << endl;
-        return;
+        pthread_mutex_unlock(&lock_console);
     }
     else
     {
@@ -394,10 +459,16 @@ void cancelBookedTicket(int threadNo, Query query, int randomTicketIndex)
         cout << " Booking Id " << ticket.bookingId << endl;
         cout << " Event " << ticket.event << endl;
         cout << " No. of Tickets " << ticket.numOfSeats << endl;
+        pthread_mutex_unlock(&lock_console);
         completedQueryExecution(row);
     }
 }
 
+/**
+ * @brief Periodically auto query generation by the worker threads created by the master thread
+ * @param arg {struct WorkerThread}
+ * @return void*
+ */
 void *autoGenerateQueries(void *arg)
 {
     WorkerThread *wthread = (WorkerThread *)arg;
@@ -446,9 +517,9 @@ void *autoGenerateQueries(void *arg)
 }
 
 /**
- * @brief Starting Reservation System Daemon
+ * @brief Starting reservation system daemon
  * master thread is created for Daemon
- * @param arg
+ * @param arg {NULL}
  * @return void*
  */
 void *startReservationSystemDaemon(void *arg)
